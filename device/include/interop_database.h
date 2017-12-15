@@ -57,6 +57,8 @@ static const interop_addr_entry_t interop_addr_database[] = {
 
   // JayBird Family
   {{{0x00, 0x18, 0x91,      0,0,0}}, 3, INTEROP_2MBPS_LINK_ONLY},
+  // MBH10
+  {{{0x20, 0x15, 0x06,      0,0,0}}, 3, INTEROP_2MBPS_LINK_ONLY},
 
   // LG Tone HBS-730 - unacceptably loud volume
   {{{0x00, 0x18, 0x6b,      0,0,0}}, 3, INTEROP_DISABLE_ABSOLUTE_VOLUME},
@@ -105,6 +107,8 @@ static const interop_addr_entry_t interop_addr_database[] = {
   {{{0x28, 0x18, 0x78,       0,0,0}}, 3, INTEROP_DISABLE_SDP_AFTER_PAIRING},
   // Tero's Game Controller
   {{{0x60, 0x45, 0xBD,       0,0,0}}, 3, INTEROP_DISABLE_SDP_AFTER_PAIRING},
+  // MEIYI HID Device
+  {{{0x58, 0x71, 0x33,       0,0,0}}, 3, INTEROP_DISABLE_SDP_AFTER_PAIRING},
 
   // Targus BT Laser Notebook Mouse
   {{{0x00, 0x12, 0xA1,       0,0,0}}, 3, INTEROP_DISABLE_AUTH_FOR_HID_POINTING},
@@ -114,6 +118,9 @@ static const interop_addr_entry_t interop_addr_database[] = {
 
   // Fiat Carkit
   {{{0x00, 0x14, 0x09,       0,0,0}}, 3, INTEROP_INCREASE_AG_CONN_TIMEOUT},
+
+  //Renault Carkit
+  {{{0x98, 0x7B, 0xF3,       0,0,0}}, 3, INTEROP_DISABLE_HF_INDICATOR},
 
   // Dialog Keyboard and mouse
   {{{0x80, 0xea, 0xca,      0,0,0}}, 3, INTEROP_DISABLE_LE_SECURE_CONNECTIONS},
@@ -134,6 +141,13 @@ static const interop_addr_entry_t interop_addr_database[] = {
   {{{0x00, 0x00, 0x6a,      0,0,0}}, 3, INTEROP_ADV_PBAP_VER_1_1},
   {{{0x00, 0x00, 0x7f,      0,0,0}}, 3, INTEROP_ADV_PBAP_VER_1_1},
   {{{0x00, 0x01, 0x0a,      0,0,0}}, 3, INTEROP_ADV_PBAP_VER_1_1},
+
+  //M12
+  {{{0x00, 0x08, 0x8a,      0,0,0}}, 3, INTEROP_DISABLE_CODEC_NEGOTIATION},
+
+  //Bose Mini II sound link
+  {{{0x04, 0x52, 0xc7,      0,0,0}}, 3, INTEROP_DELAY_SCO_FOR_MT_CALL},
+
 };
 
 typedef struct {
@@ -177,6 +191,10 @@ static const interop_name_entry_t interop_name_database[] = {
 
   // Land Rover Carkit
   {"Discovery Sport", 15, INTEROP_ADV_PBAP_VER_1_1},
+
+  //JABRA EASYGO
+  {"JABRA EASYGO", 12, INTEROP_DISABLE_CODEC_NEGOTIATION},
+
 };
 
 typedef struct {

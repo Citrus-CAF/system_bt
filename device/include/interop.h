@@ -102,6 +102,10 @@ typedef enum {
   // preferred conn params for such devices and allow them to explicity ask for it.
   INTEROP_DISABLE_LE_CONN_PREFERRED_PARAMS,
 
+  //Few carkit hfp version is hfp1.5 but it support hfp indicator, violate spec
+  //remove hfp indicator for such device
+  INTEROP_DISABLE_HF_INDICATOR,
+
   // Few remote devices do not understand AVRCP version greater than 1.3. For these
   // devices, we would like to blacklist them and advertise AVRCP version as 1.3
   INTEROP_ADV_AVRCP_VER_1_3,
@@ -115,6 +119,19 @@ typedef enum {
   // leading them to go in bad state. So for better interoperability respond with PBAP 1.1
   // as supported version.
   INTEROP_ADV_PBAP_VER_1_1,
+
+  // Some remotes are taking too long to respond for codec negotiation.
+  // Disable codec negotiation for such remotes and directly initiate
+  // SCO Connection.
+  INTEROP_DISABLE_CODEC_NEGOTIATION,
+
+  // Some remotes are very strict in receiving the call active
+  // indicator and SCO connection request order for MT call.
+  // If CIEV1,1 and SCO connection request are sent back to back
+  // to SOC, it may send SCO connection request first then CIEV1,1
+  // which may lead to remotes not rendering SCO audio.
+  INTEROP_DELAY_SCO_FOR_MT_CALL,
+
 } interop_feature_t;
 
 // Check if a given |addr| matches a known interoperability workaround as identified
