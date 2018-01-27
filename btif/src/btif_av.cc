@@ -167,8 +167,10 @@ bool bt_split_a2dp_enabled = false;
 bool reconfig_a2dp = false;
 bool btif_a2dp_audio_if_init = false;
 bool codec_cfg_change = false;
+bool audio_start_awaited = false;
 extern bool enc_update_in_progress;
 #endif // ENABLE_SPLIT_A2DP
+extern bool is_block_hal_start;
 /*SPLITA2DP */
 /* both interface and media task needs to be ready to alloc incoming request */
 #define CHECK_BTAV_INIT()                                                    \
@@ -204,7 +206,7 @@ int btif_av_idx_by_bdaddr(RawAddress *bd_addr);
 static int btif_av_get_valid_idx_for_rc_events(RawAddress bd_addr, int rc_handle);
 static int btif_get_conn_state_of_device(RawAddress address);
 static bt_status_t connect_int(RawAddress *bd_addr, uint16_t uuid);
-static void btif_av_update_current_playing_device(int index);
+void btif_av_update_current_playing_device(int index);
 static void btif_av_check_rc_connection_priority(void *p_data);
 static bt_status_t connect_int(RawAddress* bd_addr, uint16_t uuid);
 #ifdef ENABLE_SPLIT_A2DP
@@ -233,7 +235,7 @@ extern bool btif_rc_get_connected_peer(RawAddress* peer_addr);
 extern uint8_t btif_rc_get_connected_peer_handle(const RawAddress& peer_addr);
 extern void btif_rc_check_handle_pending_play(const RawAddress& peer_addr,
                                               bool bSendToApp);
-extern void btif_rc_get_playing_device(RawAddress address);
+extern void btif_rc_get_playing_device(RawAddress *address);
 extern void btif_rc_clear_playing_state(bool play);
 extern void btif_rc_clear_priority(RawAddress address);
 extern void btif_rc_send_pause_command(RawAddress bda);
@@ -244,7 +246,7 @@ extern void btif_a2dp_on_idle(int index);
 extern fixed_queue_t* btu_general_alarm_queue;
 extern void btif_media_send_reset_vendor_state();
 extern tBTIF_A2DP_SOURCE_VSC btif_a2dp_src_vsc;
-
+extern uint8_t* bta_av_co_get_peer_codec_info(uint8_t hdl);
 /*****************************************************************************
  * Local helper functions
  *****************************************************************************/
@@ -315,6 +317,7 @@ const char* dump_av_sm_event_name(btif_av_sm_event_t event) {
     CASE_RETURN_STR(BTIF_AV_SINK_CONFIG_REQ_EVT)
     CASE_RETURN_STR(BTIF_AV_OFFLOAD_START_REQ_EVT)
     CASE_RETURN_STR(BTA_AV_OFFLOAD_STOP_RSP_EVT)
+    CASE_RETURN_STR(BTIF_AV_SETUP_CODEC_REQ_EVT)
     default:
       return "UNKNOWN_EVENT";
   }
@@ -641,27 +644,16 @@ static bool btif_av_state_idle_handler(btif_sm_event_t event, void* p_data, int 
       btif_av_cb[index].bta_handle = ((tBTA_AV*)p_data)->registr.hndl;
       break;
 
-    case BTA_AV_PENDING_EVT:
     case BTIF_AV_CONNECT_REQ_EVT: {
-      if (event == BTIF_AV_CONNECT_REQ_EVT) {
         btif_av_connect_req_t* connect_req_p = (btif_av_connect_req_t*)p_data;
         btif_av_cb[index].peer_bda = *connect_req_p->target_bda;
         BTA_AvOpen(btif_av_cb[index].peer_bda, btif_av_cb[index].bta_handle, true,
                    BTA_SEC_AUTHENTICATE, connect_req_p->uuid);
-      } else if (event == BTA_AV_PENDING_EVT) {
-        btif_av_cb[index].peer_bda = ((tBTA_AV*)p_data)->pend.bd_addr;
-        if (bt_av_src_callbacks != NULL) {
-          BTA_AvOpen(btif_av_cb[index].peer_bda, btif_av_cb[index].bta_handle, true,
-                     BTA_SEC_AUTHENTICATE, UUID_SERVCLASS_AUDIO_SOURCE);
-        }
-        if (bt_av_sink_callbacks != NULL) {
-          BTA_AvOpen(btif_av_cb[index].peer_bda, btif_av_cb[index].bta_handle, true,
-                     BTA_SEC_AUTHENTICATE, UUID_SERVCLASS_AUDIO_SINK);
-        }
-      }
-      btif_sm_change_state(btif_av_cb[index].sm_handle, BTIF_AV_STATE_OPENING);
-    } break;
 
+      btif_sm_change_state(btif_av_cb[index].sm_handle, BTIF_AV_STATE_OPENING);
+      } break;
+
+    case BTA_AV_PENDING_EVT:
     case BTA_AV_RC_OPEN_EVT:
       /* IOP_FIX: Jabra 620 only does RC open without AV open whenever it
        * connects. So
@@ -1578,6 +1570,14 @@ static bool btif_av_state_opened_handler(btif_sm_event_t event, void* p_data,
       btif_av_check_rc_connection_priority(p_data);
     }  break;
 
+    case BTIF_AV_SETUP_CODEC_REQ_EVT:{
+      uint8_t hdl = btif_av_get_av_hdl_from_idx(index);
+      APPL_TRACE_DEBUG("%s: hdl = %d",__func__, hdl);
+      if (hdl >= 0)
+        btif_a2dp_source_setup_codec(hdl);
+      }
+      break;
+
     case BTA_AV_DELAY_REPORT_EVT:
       /* Initial delay report after avdtp stream configuration */
       BTIF_TRACE_DEBUG("%s : BTA_AV_DELAY_REPORT_EVT received", __func__);
@@ -1859,8 +1859,47 @@ static bool btif_av_state_started_handler(btif_sm_event_t event, void* p_data,
       // Check if this suspend is due to DUAL_Handoff
       if ((btif_av_cb[index].dual_handoff) &&
           (p_av->suspend.status == BTA_AV_SUCCESS)) {
-        BTIF_TRACE_EVENT("BTA_AV_SUSPEND_EVT: Dual handoff");
-        btif_dispatch_sm_event(BTIF_AV_START_STREAM_REQ_EVT, NULL, 0);
+#ifdef ENABLE_SPLIT_A2DP
+        if (!btif_av_is_split_a2dp_enabled()){
+#endif // ENABLE_SPLIT_A2DP
+          uint8_t curr_hdl = btif_av_cb[index].bta_handle;
+          uint8_t* cur_codec_cfg = NULL;
+          uint8_t* old_codec_cfg = NULL;
+          cur_codec_cfg = bta_av_co_get_peer_codec_info(curr_hdl);
+          BTIF_TRACE_EVENT("BTA_AV_SUSPEND_EVT: Current codec = ");
+          for (int i = 0; i < AVDT_CODEC_SIZE; i++)
+            BTIF_TRACE_EVENT("%d ",cur_codec_cfg[i]);
+          int other_index = btif_av_get_other_connected_idx(index);
+          if (other_index != INVALID_INDEX) {
+            uint8_t other_hdl = btif_av_cb[other_index].bta_handle;
+            old_codec_cfg = bta_av_co_get_peer_codec_info(other_hdl);
+          }
+          BTIF_TRACE_EVENT("BTA_AV_SUSPEND_EVT: Old codec = ");
+          for (int i = 0; i < AVDT_CODEC_SIZE; i++)
+            BTIF_TRACE_EVENT("%d ",old_codec_cfg[i]);
+          if ((cur_codec_cfg != NULL) && (old_codec_cfg != NULL)) {
+           if((A2DP_GetTrackBitsPerSample(cur_codec_cfg)==A2DP_GetTrackBitsPerSample(old_codec_cfg))
+              && (A2DP_GetTrackSampleRate(cur_codec_cfg)==A2DP_GetTrackSampleRate(old_codec_cfg) &&
+              (A2DP_GetTrackChannelCount(cur_codec_cfg)==A2DP_GetTrackChannelCount(old_codec_cfg))))
+            {
+              BTIF_TRACE_EVENT("BTA_AV_SUSPEND_EVT: Dual handoff");
+              btif_dispatch_sm_event(BTIF_AV_START_STREAM_REQ_EVT, NULL, 0);
+            } else {
+              btif_dispatch_sm_event(BTIF_AV_SETUP_CODEC_REQ_EVT, NULL, 0);
+              is_block_hal_start = true;
+              btif_trigger_unblock_audio_start_recovery_timer();
+              BTIF_TRACE_EVENT("BTA_AV_SUSPEND_EVT: Wait for Audio Start as codec params differs");
+            }
+          } else {
+            BTIF_TRACE_EVENT("BTA_AV_SUSPEND_EVT: Dual handoff either codec NULL");
+            btif_dispatch_sm_event(BTIF_AV_START_STREAM_REQ_EVT, NULL, 0);
+          }
+#ifdef ENABLE_SPLIT_A2DP
+        } else {
+          BTIF_TRACE_EVENT("BTA_AV_SUSPEND_EVT:SplitA2DP Disallow stack start wait Audio to Start");
+          audio_start_awaited = true;
+        }
+#endif // ENABLE_SPLIT_A2DP
       } else {
         for (int i = 0; i < btif_max_av_clients; i++) {
           if (i != index && (btif_av_cb[i].dual_handoff == true))
@@ -2072,6 +2111,14 @@ static bool btif_av_state_started_handler(btif_sm_event_t event, void* p_data,
           btif_av_cb[i].current_playing = false;
       }
       btif_av_cb[index].current_playing = true;
+      break;
+
+    case BTIF_AV_SETUP_CODEC_REQ_EVT: {
+      uint8_t hdl = btif_av_get_av_hdl_from_idx(index);
+      APPL_TRACE_DEBUG("%s: hdl = %d",__func__, hdl);
+      if (hdl >= 0)
+        btif_a2dp_source_setup_codec(hdl);
+      }
       break;
 
     case BTA_AV_DELAY_REPORT_EVT:
@@ -2371,7 +2418,9 @@ static void btif_av_handle_event(uint16_t event, char* p_param) {
       index = 0;
       BTIF_TRACE_EVENT("RC events: on index = %d", index);
       break;
-
+    case BTIF_AV_SETUP_CODEC_REQ_EVT:
+      index = btif_av_get_latest_device_idx_to_start();
+      break;
   /* FALLTHROUGH */
   default:
     BTIF_TRACE_ERROR("Unhandled event = %d", event);
@@ -2456,12 +2505,15 @@ int btif_av_get_latest_device_idx_to_start() {
   /* Get the device which sent PLAY command
    * If found, START on that index.
    */
-  btif_rc_get_playing_device(playing_address);
+  btif_rc_get_playing_device(&playing_address);
+  BTIF_TRACE_DEBUG("%s:playing device address: %s", __func__,
+                                 playing_address.ToString().c_str());
   if (!(playing_address.IsEmpty())) {
     /* Got some valid Playing device.
      * Get the AV index for this device.
      */
     i = btif_av_idx_by_bdaddr(&playing_address);
+    BTIF_TRACE_DEBUG("%s: index i = %d", __func__, i);
     if (i == btif_max_av_clients)
       return btif_max_av_clients;
     BTIF_TRACE_EVENT("Got some valid Playing device; %d", i);
@@ -3346,9 +3398,9 @@ bool btif_av_stream_ready(void) {
 
   for (i = 0; i < btif_max_av_clients; i++) {
     btif_av_cb[i].state = btif_sm_get_state(btif_av_cb[i].sm_handle);
-    BTIF_TRACE_DEBUG("btif_av_stream_ready : sm hdl %d, state %d, flags %x",
+    BTIF_TRACE_DEBUG("%s : sm hdl %d, state %d, flags %x, handoff %d", __func__,
                    btif_av_cb[i].sm_handle, btif_av_cb[i].state,
-                   btif_av_cb[i].flags);
+                   btif_av_cb[i].flags, btif_av_cb[i].dual_handoff);
     /* Multicast:
      * If any of the stream is in pending suspend state when
      * we initiate start, it will result in inconsistent behavior
@@ -3726,7 +3778,7 @@ bool btif_av_is_playing_on_other_idx(int current_index)
  * Returns          void
  *
  ******************************************************************************/
-static void btif_av_update_current_playing_device(int index) {
+void btif_av_update_current_playing_device(int index) {
   int i;
   for (i = 0; i < btif_max_av_clients; i++)
     if (i != index)
@@ -4225,6 +4277,19 @@ bool btif_av_is_under_handoff() {
   }
   return false;
 }
+#endif // ENABLE_SPLIT_A2DP
+
+bool btif_av_is_handoff_set() {
+  for (int i = 0; i < btif_max_av_clients; i++) {
+    if (btif_av_cb[i].dual_handoff) {
+      BTIF_TRACE_DEBUG("%s: AV is under handoff for idx = %d",__func__, i);
+      return true;
+    }
+  }
+  return false;
+}
+
+#ifdef ENABLE_SPLIT_A2DP
 bool btif_av_is_device_disconnecting() {
   int i;
   btif_sm_state_t state = BTIF_AV_STATE_IDLE;
